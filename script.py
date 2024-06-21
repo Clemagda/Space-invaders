@@ -105,26 +105,14 @@ def evaluate_and_record(env, model, episodes=5, filename="output.mp4"):
     writer.close()
     return scores
 
-
-# Évaluer les performances AVANT l'entraînement
-env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='human')
-env = AtariPreprocessing(env)
-env = FrameStack(env, 4)
-
-# env.seed(seed)
-env.get_wrapper_attr('seed')
-
-scores_before = evaluate_and_record(
-    env, model, episodes=5, filename="before_training.mp4")
-env.close()
-print(f"Scores before training: {scores_before}")
-# Scores before training: [275.0, 390.0, 275.0, 95.0, 95.0]
-
 # Fonction d'entraînement du modèle
 
 
-def train_model(env, model, target_model, episodes=10):
+def train_model(env, model, target_model, episodes=10, filename="training_output.mp4"):
     global frame_count, running_reward, episode_count, epsilon
+
+    # Ajouter un writer pour enregistrer la vidéo de l'entraînement
+    writer = imageio.get_writer(filename, fps=30)
 
     while True:
         # Reinitialise l'environnement et les récompenses à chaque épisode
@@ -202,7 +190,6 @@ def train_model(env, model, target_model, episodes=10):
                 print(template.format(running_reward, episode_count, frame_count))
 
             # Suppression des anciennes transitions pour limiter la taille de l'historique
-            # TODO: chercher mot clé transition in RL
             if len(rewards_history) > max_memory_length:
                 del rewards_history[:1]
                 del state_history[:1]
@@ -212,6 +199,10 @@ def train_model(env, model, target_model, episodes=10):
 
             if done:
                 break
+
+            # Visualiser l'environnement à chaque étape
+            frame = env.render()
+            writer.append_data(frame)
 
         # Ajout de la récompense cumulée de l'épisode à l'historique et mise à jour
         # de la récompense moyenne
@@ -231,23 +222,34 @@ def train_model(env, model, target_model, episodes=10):
             print(f"Stopped at episode {episode_count}!")
             break
 
+    writer.close()
+
+
+# Évaluer les performances AVANT l'entraînement
+env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='human')
+env = AtariPreprocessing(env)
+env = FrameStack(env, 4)
+
+scores_before = evaluate_and_record(
+    env, model, episodes=5, filename="before_training.mp4")
+env.close()
+print(f"Scores before training: {scores_before}")
+# Scores before training: [5.0, 55.0, 55.0, 5.0, 55.0]
 
 # Entraîner le modèle
-env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='human')
+env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='rgb_array')
 env = AtariPreprocessing(env)
 env = FrameStack(env, 4)
 env.seed(seed)
 
-train_model(env, model, model_target, episodes=10)
+train_model(env, model, model_target, episodes=50)
 env.close()
 
-# Evaluer les performances après entrainement
-env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='human')
+# Evaluer les performances après entrainement et enregistrer la vidéo
+env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='rgb_array')
 env = AtariPreprocessing(env)
 env = FrameStack(4)
 env.seed(seed)
-
-# FIXME:
 
 scores_after = evaluate_and_record(
     env, model, episodes=5, filename="after_training.mp4")
