@@ -1,3 +1,5 @@
+from datetime import datetime
+from fileinput import filename
 import os
 from xml.sax.handler import feature_namespaces
 import cv2
@@ -108,14 +110,22 @@ def evaluate_and_record(env, model, episodes=5, filename="output.mp4"):
 # Fonction d'entraînement du modèle
 
 
-def train_model(env, model, target_model, episodes=10, filename="training_output.mp4"):
-    global frame_count, running_reward, episode_count, epsilon
+def train_model(env, model, target_model, episodes=50, filename_prefix="training_output"):
+    global frame_count, epsilon
+
+    output_dir = "./Outputs/Trainings/"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Créer un horodatage du fichier pour créer un historique
+    timestamp = datetime.now().strftime("%d%m%H%M")
+    filename = f"{filename_prefix}_{timestamp}.mp4"
+    filepath = os.path.join(output_dir, filename)
 
     # Ajouter un writer pour enregistrer la vidéo de l'entraînement
     writer = imageio.get_writer(filename, fps=30)
 
-    while True:
-        # Reinitialise l'environnement et les récompenses à chaque épisode
+    for episode in range(episodes):
+        # Réinitialise l'environnement et les récompenses à chaque épisode
         observation, _ = env.reset()
         state = np.array(observation)
         episode_reward = 0
@@ -125,7 +135,6 @@ def train_model(env, model, target_model, episodes=10, filename="training_output
 
             # Via la probabilité Epsilon, le modèle choisit une action aléatoire.
             # Sinon, l'action avec la Q-value prédite la plus élevée est utilisée
-            # TODO: se renseigner sur Epsilon greedy, probabilité epsilon, exploitation et exploration
             if frame_count < epsilon_random_frames or epsilon > np.random.rand(1)[0]:
                 action = np.random.choice(num_actions)
             else:
@@ -135,7 +144,6 @@ def train_model(env, model, target_model, episodes=10, filename="training_output
                 action = tf.argmax(action_probs[0]).numpy()
 
             # Ici, Epsilon est progressivement réduit jusqu'à un minimum
-            # Le modèle prend de plus en plus d'actions éclairées
             epsilon -= epsilon_interval / epsilon_greedy_frames
             epsilon = max(epsilon, epsilon_min)
 
@@ -187,7 +195,7 @@ def train_model(env, model, target_model, episodes=10, filename="training_output
             if frame_count % update_target_network == 0:
                 model_target.set_weights(model.get_weights())
                 template = "running reward: {:.2f} at episode {}, frame count {}"
-                print(template.format(running_reward, episode_count, frame_count))
+                print(template.format(episode_reward, episode_count, frame_count))
 
             # Suppression des anciennes transitions pour limiter la taille de l'historique
             if len(rewards_history) > max_memory_length:
@@ -204,22 +212,11 @@ def train_model(env, model, target_model, episodes=10, filename="training_output
             frame = env.render()
             writer.append_data(frame)
 
-        # Ajout de la récompense cumulée de l'épisode à l'historique et mise à jour
-        # de la récompense moyenne
-        episode_reward_history.append(episode_reward)
-        if len(episode_reward_history) > 100:
-            del episode_reward_history[:1]
-        running_reward = np.mean(episode_reward_history)
-
-        # Compte le nombre d'épisodes et arrête l'entraînement si l'épisode final est atteint ou que
-        # la récompense moyenne actuelle atteint le palier de résolution
-        episode_count += 1
-        if running_reward >= 630:
-            print(f"Solved at episode {episode_count}!")
-            break
-
-        if running_reward > 0 and episode_count >= max_episodes:
-            print(f"Stopped at episode {episode_count}!")
+        # Compte le nombre d'épisodes et arrête l'entraînement si un épisode atteint le score de 630
+        print(f"Episode {episode + 1} ended with reward {episode_reward}")
+        if episode_reward >= 630:
+            print(
+                f"Solved at episode {episode_count} with reward {episode_reward}!")
             break
 
     writer.close()
@@ -252,6 +249,6 @@ env = FrameStack(4)
 env.seed(seed)
 
 scores_after = evaluate_and_record(
-    env, model, episodes=5, filename="after_training.mp4")
+    env, model, episodes=10, filename="after_training.mp4")
 env.close()
 print(f"Scores after training : {scores_after}")
