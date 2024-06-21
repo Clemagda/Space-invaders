@@ -113,7 +113,7 @@ def evaluate_and_record(env, model, episodes=5, filename="output.mp4"):
 def train_model(env, model, target_model, episodes=50, filename_prefix="training_output"):
     global frame_count, epsilon
 
-    output_dir = "./Outputs/Trainings/"
+    output_dir = "/Outputs/Trainings/"
     os.makedirs(output_dir, exist_ok=True)
 
     # Créer un horodatage du fichier pour créer un historique
@@ -221,6 +221,15 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
 
     writer.close()
 
+    # Sauvegarde les poids du modèle
+    # TODO: tester si .h5 ne break pas le code.
+    weights_filename = f"{filename_prefix}_weights_{timestamp}.h5"
+    weights_filepath = os.path.join(output_dir, weights_filename)
+    model.save_weights(weights_filepath)
+    print(f"Weights saved to {weights_filepath}")
+
+    return model
+
 
 # Évaluer les performances AVANT l'entraînement
 env = gym.make("SpaceInvadersNoFrameskip-v4", render_mode='human')
@@ -239,7 +248,7 @@ env = AtariPreprocessing(env)
 env = FrameStack(env, 4)
 env.seed(seed)
 
-train_model(env, model, model_target, episodes=50)
+train_model(env, model, model_target, episodes=250)
 env.close()
 
 # Evaluer les performances après entrainement et enregistrer la vidéo
@@ -252,3 +261,4 @@ scores_after = evaluate_and_record(
     env, model, episodes=10, filename="after_training.mp4")
 env.close()
 print(f"Scores after training : {scores_after}")
+# Scores after training: [100.0, 100.0, 40.0, 100.0, 40.0, 65.0, 130.0, 130.0, 40.0, 130.0]
