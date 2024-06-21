@@ -1,3 +1,7 @@
+# TODO: Réentrainer le modèle jusqu'au meilleur score
+# Sauvegarder les poids du modèle
+
+
 from datetime import datetime
 from fileinput import filename
 import os
@@ -113,7 +117,7 @@ def evaluate_and_record(env, model, episodes=5, filename="output.mp4"):
 def train_model(env, model, target_model, episodes=50, filename_prefix="training_output"):
     global frame_count, epsilon
 
-    output_dir = "/Outputs/Trainings/"
+    output_dir = "./Outputs/Training/"
     os.makedirs(output_dir, exist_ok=True)
 
     # Créer un horodatage du fichier pour créer un historique
@@ -122,7 +126,7 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
     filepath = os.path.join(output_dir, filename)
 
     # Ajouter un writer pour enregistrer la vidéo de l'entraînement
-    writer = imageio.get_writer(filename, fps=30)
+    writer = imageio.get_writer(filepath, fps=30)
 
     for episode in range(episodes):
         # Réinitialise l'environnement et les récompenses à chaque épisode
@@ -195,7 +199,7 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
             if frame_count % update_target_network == 0:
                 model_target.set_weights(model.get_weights())
                 template = "running reward: {:.2f} at episode {}, frame count {}"
-                print(template.format(episode_reward, episode_count, frame_count))
+                print(template.format(episode_reward, episode, frame_count))
 
             # Suppression des anciennes transitions pour limiter la taille de l'historique
             if len(rewards_history) > max_memory_length:
@@ -216,14 +220,13 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
         print(f"Episode {episode + 1} ended with reward {episode_reward}")
         if episode_reward >= 630:
             print(
-                f"Solved at episode {episode_count} with reward {episode_reward}!")
+                f"Solved at episode {episode + 1} with reward {episode_reward}!")
             break
 
     writer.close()
 
     # Sauvegarde les poids du modèle
-    # TODO: tester si .h5 ne break pas le code.
-    weights_filename = f"{filename_prefix}_weights_{timestamp}.h5"
+    weights_filename = f"{filename_prefix}_{timestamp}_weights.h5"
     weights_filepath = os.path.join(output_dir, weights_filename)
     model.save_weights(weights_filepath)
     print(f"Weights saved to {weights_filepath}")
@@ -248,7 +251,7 @@ env = AtariPreprocessing(env)
 env = FrameStack(env, 4)
 env.seed(seed)
 
-train_model(env, model, model_target, episodes=250)
+trained_model = train_model(env, model, model_target, episodes=250)
 env.close()
 
 # Evaluer les performances après entrainement et enregistrer la vidéo
