@@ -2,6 +2,8 @@
 # Sauvegarder les poids du modèle
 
 
+import random
+from collections import deque
 from datetime import datetime
 from fileinput import filename
 import os
@@ -72,7 +74,7 @@ frame_count = 0
 
 epsilon_random_frames = 50000
 epsilon_greedy_frames = 1000000.0
-max_memory_length = 100000
+max_memory_length = 100000000
 update_after_actions = 4
 update_target_network = 10000
 
@@ -111,25 +113,66 @@ def evaluate_and_record(env, model, episodes=5, filename="output.mp4"):
     writer.close()
     return scores
 
+# Créer un échantillonage prioritaire
+
+
+class PrioritizedReplayBuffer:
+    def __init__(self, capacity, alpha=0.6):
+        self.alpha = alpha
+        self.capacity = capacity
+        self.buffer = deque(maxlen=capacity)
+        self.priorities = deque(maxlen=capacity)
+
+    def add(self, transition, error):
+        priority = (error + 1e-5) ** self.alpha
+        if not np.isfinite(priority):  # Vérifie si la priorité est finie
+            priority = 1.0  # Utilise une valeur par défaut si elle n'est pas valide
+        self.buffer.append(transition)
+        self.priorities.append(priority)
+
+    def sample(self, batch_size, beta=0.4):
+        if len(self.buffer) == 0:
+            raise ValueError("Cannot sample from an empty buffer")
+
+        scaled_priorities = np.array(self.priorities) ** beta
+        total_priority = sum(scaled_priorities)
+        if not np.isfinite(total_priority) or total_priority == 0:
+            raise ValueError("Total of weights must be finite and non-zero")
+
+        sampling_probabilities = scaled_priorities / total_priority
+        indices = random.choices(
+            range(len(self.buffer)), k=batch_size, weights=sampling_probabilities)
+        samples = [self.buffer[i] for i in indices]
+
+        importance_sampling_weights = (
+            len(self.buffer) * sampling_probabilities[indices]) ** (-beta)
+        importance_sampling_weights /= importance_sampling_weights.max()
+
+        return samples, indices, importance_sampling_weights
+
+    def update_priorities(self, indices, errors):
+        for idx, error in zip(indices, errors):
+            priority = (error + 1e-5) ** self.alpha
+            if not np.isfinite(priority):  # Vérifie si la priorité est finie
+                priority = 1.0  # Utilise une valeur par défaut si elle n'est pas valide
+            self.priorities[idx] = priority
 # Fonction d'entraînement du modèle
 
 
 def train_model(env, model, target_model, episodes=50, filename_prefix="training_output"):
     global frame_count, epsilon
 
+    replay_buffer = PrioritizedReplayBuffer(capacity=max_memory_length)
+
     output_dir = "./Outputs/Training/"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Créer un horodatage du fichier pour créer un historique
     timestamp = datetime.now().strftime("%d%m%H%M")
     filename = f"{filename_prefix}_{timestamp}.mp4"
     filepath = os.path.join(output_dir, filename)
-
-    # Ajouter un writer pour enregistrer la vidéo de l'entraînement
     writer = imageio.get_writer(filepath, fps=30)
 
     for episode in range(episodes):
-        # Réinitialise l'environnement et les récompenses à chaque épisode
         observation, _ = env.reset()
         state = np.array(observation)
         episode_reward = 0
@@ -137,8 +180,6 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
         for timestep in range(1, max_steps_per_episode):
             frame_count += 1
 
-            # Via la probabilité Epsilon, le modèle choisit une action aléatoire.
-            # Sinon, l'action avec la Q-value prédite la plus élevée est utilisée
             if frame_count < epsilon_random_frames or epsilon > np.random.rand(1)[0]:
                 action = np.random.choice(num_actions)
             else:
@@ -147,35 +188,39 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
                 action_probs = model(state_tensor, training=False)
                 action = tf.argmax(action_probs[0]).numpy()
 
-            # Ici, Epsilon est progressivement réduit jusqu'à un minimum
             epsilon -= epsilon_interval / epsilon_greedy_frames
             epsilon = max(epsilon, epsilon_min)
 
-            # Exécution de l'action et mise à jour de l'environnement
             state_next, reward, done, _, _ = env.step(action)
             state_next = np.array(state_next)
-
             episode_reward += reward
 
-            # Création d'un historique d'entraînement
-            action_history.append(action)
-            state_history.append(state)
-            state_next_history.append(state_next)
-            done_history.append(done)
-            rewards_history.append(reward)
+            target = reward + gamma * \
+                np.max(model_target.predict(
+                    np.expand_dims(state_next, axis=0))[0])
+            current_q = np.max(model.predict(np.expand_dims(state, axis=0))[0])
+            td_error = abs(target - current_q)
+
+            replay_buffer.add(
+                (state, action, reward, state_next, done), td_error)
             state = state_next
 
-            if frame_count % update_after_actions == 0 and len(done_history) > batch_size:
-                indices = np.random.choice(
-                    range(len(done_history)), size=batch_size)
+            if frame_count % update_after_actions == 0 and len(replay_buffer.buffer) > batch_size:
+                try:
+                    samples, indices, weights = replay_buffer.sample(
+                        batch_size)
+                except ValueError as e:
+                    print(f"Error sampling from buffer: {e}")
+                    continue
 
-                state_sample = np.array([state_history[i] for i in indices])
-                state_next_sample = np.array(
-                    [state_next_history[i] for i in indices])
-                rewards_sample = [rewards_history[i] for i in indices]
-                action_sample = [action_history[i] for i in indices]
-                done_sample = tf.convert_to_tensor(
-                    [float(done_history[i]) for i in indices])
+                state_sample, action_sample, rewards_sample, state_next_sample, done_sample = zip(
+                    *samples)
+
+                state_sample = np.array(state_sample)
+                state_next_sample = np.array(state_next_sample)
+                rewards_sample = np.array(rewards_sample)
+                done_sample = np.array(done_sample)
+                weights = np.array(weights)
 
                 future_rewards = model_target.predict(state_next_sample)
                 updated_q_values = rewards_sample + gamma * \
@@ -195,28 +240,22 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
                 optimizer.apply_gradients(
                     zip(grads, model.trainable_variables))
 
-            # Mise à jour du modèle avec les poids du modèle principal
+                td_errors = rewards_sample + gamma * \
+                    tf.reduce_max(future_rewards, axis=1) - \
+                    tf.reduce_max(model.predict(state_sample), axis=1)
+                replay_buffer.update_priorities(indices, td_errors)
+
             if frame_count % update_target_network == 0:
                 model_target.set_weights(model.get_weights())
                 template = "running reward: {:.2f} at episode {}, frame count {}"
                 print(template.format(episode_reward, episode, frame_count))
 
-            # Suppression des anciennes transitions pour limiter la taille de l'historique
-            if len(rewards_history) > max_memory_length:
-                del rewards_history[:1]
-                del state_history[:1]
-                del state_next_history[:1]
-                del action_history[:1]
-                del done_history[:1]
-
             if done:
                 break
 
-            # Visualiser l'environnement à chaque étape
             frame = env.render()
             writer.append_data(frame)
 
-        # Compte le nombre d'épisodes et arrête l'entraînement si un épisode atteint le score de 630
         print(f"Episode {episode + 1} ended with reward {episode_reward}")
         if episode_reward >= 630:
             print(
@@ -225,7 +264,6 @@ def train_model(env, model, target_model, episodes=50, filename_prefix="training
 
     writer.close()
 
-    # Sauvegarde les poids du modèle
     weights_filename = f"{filename_prefix}_{timestamp}_weights.h5"
     weights_filepath = os.path.join(output_dir, weights_filename)
     model.save_weights(weights_filepath)
@@ -251,7 +289,7 @@ env = AtariPreprocessing(env)
 env = FrameStack(env, 4)
 env.seed(seed)
 
-trained_model = train_model(env, model, model_target, episodes=250)
+trained_model = train_model(env, model, model_target, episodes=20)
 env.close()
 
 # Evaluer les performances après entrainement et enregistrer la vidéo
@@ -261,7 +299,7 @@ env = FrameStack(4)
 env.seed(seed)
 
 scores_after = evaluate_and_record(
-    env, model, episodes=10, filename="after_training.mp4")
+    env, model, episodes=10, filename="after_training_2406.mp4")
 env.close()
 print(f"Scores after training : {scores_after}")
 # Scores after training: [100.0, 100.0, 40.0, 100.0, 40.0, 65.0, 130.0, 130.0, 40.0, 130.0]
